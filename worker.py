@@ -167,10 +167,10 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 
 def _start_probe_server() -> None:
-    server = ThreadingHTTPServer(("127.0.0.1", MODEL_SERVER_PORT), HealthHandler)
-    thread = threading.Thread(target=server.serve_forever, name="a2f-probe-http", daemon=True)
-    thread.start()
-    _log(INFO_LOG_PREFIX, "probe server started", url=f"{MODEL_SERVER_URL}:{MODEL_SERVER_PORT}")
+    # Vast's PyWorker SDK binds MODEL_SERVER_PORT for its own worker/session server.
+    # Readiness is reported through A2F_READY log_action, so do not bind a second
+    # local HTTP server here.
+    _log(INFO_LOG_PREFIX, "probe server disabled", worker_port=os.getenv("WORKER_PORT", ""), model_server_port=MODEL_SERVER_PORT)
 
 
 def _workload(_: dict[str, Any]) -> float:
