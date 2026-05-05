@@ -26,7 +26,7 @@ from typing import Any
 from vastai import BenchmarkConfig, HandlerConfig, LogActionConfig, Worker, WorkerConfig
 
 MODEL_SERVER_URL = os.getenv("PYWORKER_MODEL_SERVER_URL", "http://127.0.0.1")
-MODEL_SERVER_PORT = int(os.getenv("PYWORKER_MODEL_SERVER_PORT", "18000"))
+MODEL_SERVER_PORT = int(os.getenv("PYWORKER_MODEL_SERVER_PORT", "18001"))
 MODEL_LOG_FILE = os.getenv("PYWORKER_MODEL_LOG_FILE", "/var/log/portal/a2f-pyworker.log")
 
 A2F_HTTP_READY_URL = os.getenv("A2F_HTTP_READY_URL", "http://127.0.0.1:8000/v1/health/ready")
@@ -54,8 +54,9 @@ def _ensure_log_file() -> None:
     path.write_text("", encoding="utf-8")
 
 
-def _log(prefix: str, message: str, **fields: Any) -> None:
-    payload = {"message": message, **fields}
+def _log(prefix: str, event: str, **fields: Any) -> None:
+    payload = dict(fields)
+    payload["event"] = event
     line = f"{prefix} {json.dumps(payload, separators=(',', ':'), sort_keys=True)}\n"
     with open(MODEL_LOG_FILE, "a", encoding="utf-8") as fh:
         fh.write(line)
