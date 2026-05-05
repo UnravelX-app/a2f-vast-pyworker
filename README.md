@@ -10,7 +10,9 @@ A2F NIM service to become ready on HTTP `8000` and gRPC `52000`, then emits the
 ## Files
 
 - `worker.py` - Vast PyWorker config + local readiness probe server.
-- `requirements.txt` - Python dependencies for Vast to install.
+- `requirements.txt` - Python dependencies for the worker image.
+- `Dockerfile` - Custom image layered on NVIDIA A2F NIM.
+- `docker-entrypoint.sh` - Starts A2F and the PyWorker in one container.
 
 ## Vast Template
 
@@ -79,3 +81,49 @@ The PyWorker exposes lightweight HTTP routes for Vast's readiness/benchmarking:
 
 Your production A2F wrapper should still connect to the mapped external
 `52000/tcp` port for live gRPC sessions.
+
+
+## Custom Docker Image Mode
+
+This is the recommended Serverless path. It avoids relying on Vast's template
+bootstrap to clone `PYWORKER_REPO`.
+
+Build and push the image:
+
+```bash
+docker build -t ghcr.io/UnravelX-app/a2f-vast-pyworker:1.3.16 .
+docker push ghcr.io/UnravelX-app/a2f-vast-pyworker:1.3.16
+```
+
+Use that image in Vast instead of the raw NVIDIA image:
+
+```text
+ghcr.io/UnravelX-app/a2f-vast-pyworker:1.3.16
+```
+
+The NVIDIA A2F `1.3.16` image starts with:
+
+```text
+/bin/bash -c "$SERVER_START_SCRIPT_PATH"
+```
+
+The Dockerfile sets this as the default `A2F_START_CMD`, so Vast does not need
+custom Docker ENTRYPOINT args. Override `A2F_START_CMD` only if NVIDIA changes the
+base image startup command in a future tag.
+
+### Vast Docker Options
+
+For Claire on RTX 4090:
+
+```text
+-p 8000:8000 -p 52000:52000 -p 18000:18000 --gpus all --ipc=host -v /workspace/a2f-cache:/tmp/a2x -e NGC_API_KEY=nvapi-xxx -e NVIDIA_VISIBLE_DEVICES=all -e NVIDIA_DRIVER_CAPABILITIES=compute,utility,video -e NIM_MANIFEST_PROFILE=c761e52b62df2a2a46047aed74dd6e1da8826f3596bec3c197372c7592478f6b -e PERF_A2F_MODEL=claire_v2.3
+```
+
+For Mark, change:
+
+```text
+-e PERF_A2F_MODEL=mark_v2.3
+```
+
+Do not set `PYWORKER_REPO` when using the custom image. The worker is already
+inside the image.
