@@ -5,7 +5,7 @@ USER root
 WORKDIR /app
 
 COPY requirements.txt /app/requirements.txt
-RUN python3 -m pip install --no-cache-dir -r /app/requirements.txt
+RUN python3 -m pip install --no-cache-dir --index-url https://pypi.org/simple -r /app/requirements.txt
 
 COPY worker.py /app/worker.py
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
