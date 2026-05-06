@@ -150,29 +150,6 @@ except urllib.error.HTTPError as exc:
 except Exception as exc:
     print(f"  error={type(exc).__name__}: {exc}")
 
-print("diagnostic: gpu visibility")
-try:
-    r = subprocess.run(
-        ["nvidia-smi", "--query-gpu=index,name,memory.free,memory.total,driver_version", "--format=csv,noheader"],
-        capture_output=True, text=True, timeout=5,
-    )
-    if r.returncode == 0:
-        for line in r.stdout.strip().splitlines():
-            print(f"  gpu: {line.strip()}")
-    else:
-        print(f"  nvidia-smi rc={r.returncode} stderr={r.stderr[:200]}")
-except Exception as exc:
-    print(f"  nvidia-smi error={type(exc).__name__}: {exc}")
-
-print("diagnostic: cuda init")
-try:
-    import ctypes
-    lib = ctypes.CDLL("libcuda.so.1")
-    rc = lib.cuInit(0)
-    print(f"  cuInit rc={rc} (0=OK, 100=NO_DEVICE, 999=not_initialized)")
-except Exception as exc:
-    print(f"  libcuda error={type(exc).__name__}: {exc}")
-
 print("diagnostic: start_server open files")
 import glob as _glob
 start_server_pid = None
@@ -233,17 +210,16 @@ PYDIAG
 wait_for_a2f_ready() {
   local timeout="${A2F_READY_TIMEOUT_SEC:-3600}"
   local deadline=$((SECONDS + timeout))
-  local grpc_host="${A2F_GRPC_HOST:-127.0.0.1}"
-  local grpc_port="${A2F_GRPC_PORT:-52000}"
+  local http_url="${A2F_HTTP_READY_URL:-http://127.0.0.1:8000/v1/health/ready}"
   local last_wait_log=0
 
-  log "waiting for A2F gRPC before starting PyWorker: grpc=${grpc_host}:${grpc_port} timeout=${timeout}s"
+  log "waiting for A2F HTTP readiness before starting PyWorker: url=${http_url} timeout=${timeout}s"
   while (( SECONDS < deadline )); do
-    if python3 - "$grpc_host" "$grpc_port" <<'PYREADY' >/dev/null 2>&1
-import socket, sys
-host, port = sys.argv[1], int(sys.argv[2])
-with socket.create_connection((host, port), timeout=2):
-    pass
+    if python3 - "$http_url" <<'PYREADY' >/dev/null 2>&1
+import sys, urllib.request
+with urllib.request.urlopen(sys.argv[1], timeout=2) as resp:
+    if resp.status < 200 or resp.status >= 300:
+        raise SystemExit(1)
 PYREADY
     then
       return 0
@@ -258,29 +234,6 @@ PYREADY
 
   log "timed out waiting for A2F readiness"
   return 70
-}
-
-check_gpu_accessible() {
-  log "checking GPU/CUDA accessibility"
-  if command -v nvidia-smi >/dev/null 2>&1; then
-    nvidia-smi -L >&2 || log "WARNING: nvidia-smi -L failed"
-  else
-    log "WARNING: nvidia-smi not found — GPU driver may be inaccessible"
-  fi
-  python3 - <<'PYCUDA' >&2 || log "WARNING: CUDA cuInit failed — no GPU visible inside container; Triton will fail to start on port 52000; check that the VAST.ai template passes --gpus all / --runtime=nvidia"
-import ctypes, sys
-try:
-    lib = ctypes.CDLL("libcuda.so.1")
-    rc = lib.cuInit(0)
-    if rc == 0:
-        print("[a2f-entrypoint] CUDA cuInit OK — GPU accessible to Triton", file=sys.stderr)
-    else:
-        print(f"[a2f-entrypoint] CUDA cuInit rc={rc} (100=NO_DEVICE) — Triton will not find a GPU", file=sys.stderr)
-        sys.exit(1)
-except OSError as exc:
-    print(f"[a2f-entrypoint] cannot load libcuda.so.1: {exc} — GPU not accessible", file=sys.stderr)
-    sys.exit(1)
-PYCUDA
 }
 
 start_pyworker_after_a2f_boot() {
@@ -308,8 +261,6 @@ if [ "${NIM_SKIP_A2F_START:-}" = "true" ] || [ "${NIM_SKIP_A2F_START:-}" = "1" ]
   log "unsetting NIM_SKIP_A2F_START so NVIDIA start_server can launch gRPC on 52000"
   unset NIM_SKIP_A2F_START
 fi
-
-check_gpu_accessible
 
 start_pyworker_after_a2f_boot &
 pyworker_pid=$!
