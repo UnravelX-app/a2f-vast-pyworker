@@ -2,6 +2,12 @@ FROM nvcr.io/nim/nvidia/audio2face-3d:1.3.16
 
 USER root
 
+RUN if [ -d /usr/local/lib/x86_64-linux-gnu ]; then \
+        cp -a /usr/local/lib/x86_64-linux-gnu/. /usr/lib/x86_64-linux-gnu/ && ldconfig; \
+    else \
+        ldconfig; \
+    fi
+
 WORKDIR /app
 
 COPY requirements.txt /app/requirements.txt
@@ -14,6 +20,7 @@ RUN chmod +x /app/docker-entrypoint.sh \
     && mkdir -p /var/log/portal /workspace/a2f-cache
 
 ENV PYTHONUNBUFFERED=1 \
+    A2F_WRAPPER_BUILD=4090-gst-v5 \
     PYWORKER_MODEL_SERVER_URL=http://127.0.0.1 \
     WORKER_PORT=18000 \
     PYWORKER_MODEL_SERVER_PORT=18000 \
