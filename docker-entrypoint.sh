@@ -127,7 +127,7 @@ PYREADY
 }
 
 wait_for_a2f_ready
-/opt/pyworker-venv/bin/python /app/worker.py &
+PYTHONPATH="/opt/pyworker-deps:${PYTHONPATH:-}" python3 /app/worker.py &
 PYWORKER_PID=$!
 
 # Keep the wrapper alive while either process is alive. If one exits, stop the

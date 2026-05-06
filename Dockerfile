@@ -11,8 +11,8 @@ RUN if [ -d /usr/local/lib/x86_64-linux-gnu ]; then \
 WORKDIR /app
 
 COPY requirements.txt /app/requirements.txt
-RUN python3 -m venv --system-site-packages /opt/pyworker-venv \
-    && /opt/pyworker-venv/bin/pip install --no-cache-dir --index-url https://pypi.org/simple -r /app/requirements.txt
+RUN python3 -m pip install --no-cache-dir --index-url https://pypi.org/simple \
+    --target /opt/pyworker-deps -r /app/requirements.txt
 
 COPY worker.py /app/worker.py
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
