@@ -11,11 +11,9 @@ RUN chmod +x /app/a2f-entrypoint.sh \
 
 WORKDIR /opt/nim
 
-ENV A2F_WRAPPER_BUILD=nim-first-native-retry-v25 \
+ENV A2F_WRAPPER_BUILD=stock-entrypoint-pyworker-v26 \
     NIM_USE_MODEL_MANIFEST_V0=False \
-    A2F_PYWORKER_START_DELAY_SEC=45 \
-    A2F_NATIVE_START_DELAY_SEC=60 \
-    A2F_NATIVE_RETRY_DELAY_SEC=30
+    A2F_PYWORKER_START_DELAY_SEC=45
 
 EXPOSE 8000 52000 18000
 
