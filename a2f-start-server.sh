@@ -10,7 +10,7 @@ dump_a2f_diagnostics() {
 import os
 import socket
 
-KEYWORDS = ("start_server", "a2f", "audio2face", "nim", "grpc", "python")
+KEYWORDS = ("start_server", "a2f", "audio2face", "nim", "grpc", "python", "triton")
 INTERESTING_PORTS = {8000, 52000, 18000}
 TCP_STATES = {
     "01": "ESTABLISHED",
@@ -109,7 +109,7 @@ if rows:
     for pid, comm, cmd in rows:
         print(f"  pid={pid} comm={comm} cmd={cmd[:260]}")
 else:
-    print("  no matching A2F/NIM/gRPC/python processes found")
+    print("  no matching A2F/NIM/gRPC/python/triton processes found")
 
 print("diagnostic: listening tcp ports")
 owners = socket_owners()
@@ -120,6 +120,59 @@ if rows:
         print(f"  {family} {addr}:{port} {state} owner={owner}{marker}")
 else:
     print("  no tcp listeners found")
+
+import urllib.request, urllib.error, subprocess
+
+print("diagnostic: a2f http health")
+try:
+    with urllib.request.urlopen("http://127.0.0.1:8000/v1/health/ready", timeout=2) as resp:
+        body = resp.read(512).decode("utf-8", "replace")
+        print(f"  status={resp.status} body={body[:400]}")
+except urllib.error.HTTPError as exc:
+    try:
+        body = exc.read(512).decode("utf-8", "replace")
+    except Exception:
+        body = ""
+    print(f"  http_error={exc.code} body={body[:400]}")
+except Exception as exc:
+    print(f"  error={type(exc).__name__}: {exc}")
+
+print("diagnostic: gpu visibility")
+try:
+    r = subprocess.run(
+        ["nvidia-smi", "--query-gpu=index,name,memory.free,memory.total,driver_version", "--format=csv,noheader"],
+        capture_output=True, text=True, timeout=5,
+    )
+    if r.returncode == 0:
+        for line in r.stdout.strip().splitlines():
+            print(f"  gpu: {line.strip()}")
+    else:
+        print(f"  nvidia-smi rc={r.returncode} stderr={r.stderr[:200]}")
+except Exception as exc:
+    print(f"  nvidia-smi error={type(exc).__name__}: {exc}")
+
+print("diagnostic: cuda init")
+try:
+    import ctypes
+    lib = ctypes.CDLL("libcuda.so.1")
+    rc = lib.cuInit(0)
+    print(f"  cuInit rc={rc} (0=OK, 100=NO_DEVICE, 999=not_initialized)")
+except Exception as exc:
+    print(f"  libcuda error={type(exc).__name__}: {exc}")
+
+print("diagnostic: triton workspace logs")
+import glob as _glob
+for pattern in ("/opt/nim/workspace/logs/*.log", "/opt/nim/workspace/logs/*.txt",
+                "/tmp/triton*.log", "/tmp/a2f*.log"):
+    for fpath in _glob.glob(pattern):
+        try:
+            with open(fpath, "rb") as fh:
+                tail = fh.read()[-1500:]
+            print(f"  {fpath} (last 1500 bytes):")
+            for ln in tail.decode("utf-8", "replace").splitlines()[-30:]:
+                print(f"    {ln}")
+        except Exception as exc:
+            print(f"  {fpath} read error: {exc}")
 PYDIAG
 }
 
@@ -153,6 +206,29 @@ PYREADY
   return 70
 }
 
+check_gpu_accessible() {
+  log "checking GPU/CUDA accessibility"
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    nvidia-smi -L >&2 || log "WARNING: nvidia-smi -L failed"
+  else
+    log "WARNING: nvidia-smi not found — GPU driver may be inaccessible"
+  fi
+  python3 - <<'PYCUDA' >&2 || log "WARNING: CUDA cuInit failed — no GPU visible inside container; Triton will fail to start on port 52000; check that the VAST.ai template passes --gpus all / --runtime=nvidia"
+import ctypes, sys
+try:
+    lib = ctypes.CDLL("libcuda.so.1")
+    rc = lib.cuInit(0)
+    if rc == 0:
+        print("[a2f-entrypoint] CUDA cuInit OK — GPU accessible to Triton", file=sys.stderr)
+    else:
+        print(f"[a2f-entrypoint] CUDA cuInit rc={rc} (100=NO_DEVICE) — Triton will not find a GPU", file=sys.stderr)
+        sys.exit(1)
+except OSError as exc:
+    print(f"[a2f-entrypoint] cannot load libcuda.so.1: {exc} — GPU not accessible", file=sys.stderr)
+    sys.exit(1)
+PYCUDA
+}
+
 start_pyworker_after_a2f_boot() {
   local delay="${A2F_PYWORKER_START_DELAY_SEC:-45}"
   log "delaying PyWorker watcher for ${delay}s so NVIDIA A2F boots untouched"
@@ -178,6 +254,8 @@ if [ "${NIM_SKIP_A2F_START:-}" = "true" ] || [ "${NIM_SKIP_A2F_START:-}" = "1" ]
   log "unsetting NIM_SKIP_A2F_START so NVIDIA start_server can launch gRPC on 52000"
   unset NIM_SKIP_A2F_START
 fi
+
+check_gpu_accessible
 
 start_pyworker_after_a2f_boot &
 pyworker_pid=$!
