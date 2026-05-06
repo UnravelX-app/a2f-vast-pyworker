@@ -172,7 +172,12 @@ start_pyworker_after_a2f_boot() {
     python3 /app/worker.py
 }
 
-log "wrapper active build=${A2F_WRAPPER_BUILD:-unknown} cwd=$(pwd) LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-} PYTHONPATH=${PYTHONPATH:-} NIM_USE_MODEL_MANIFEST_V0=${NIM_USE_MODEL_MANIFEST_V0:-<unset>}"
+log "wrapper active build=${A2F_WRAPPER_BUILD:-unknown} cwd=$(pwd) LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-} PYTHONPATH=${PYTHONPATH:-} NIM_USE_MODEL_MANIFEST_V0=${NIM_USE_MODEL_MANIFEST_V0:-<unset>} NIM_SKIP_A2F_START=${NIM_SKIP_A2F_START:-<unset>} NIM_DISABLE_MODEL_DOWNLOAD=${NIM_DISABLE_MODEL_DOWNLOAD:-<unset>} NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES:-<unset>} CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
+
+if [ "${NIM_SKIP_A2F_START:-}" = "true" ] || [ "${NIM_SKIP_A2F_START:-}" = "1" ]; then
+  log "unsetting NIM_SKIP_A2F_START so NVIDIA start_server can launch gRPC on 52000"
+  unset NIM_SKIP_A2F_START
+fi
 
 start_pyworker_after_a2f_boot &
 pyworker_pid=$!
