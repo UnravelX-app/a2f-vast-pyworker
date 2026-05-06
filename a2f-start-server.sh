@@ -153,6 +153,40 @@ PYREADY
   return 70
 }
 
+wait_for_nim_http() {
+  local timeout="${A2F_NIM_HTTP_TIMEOUT_SEC:-900}"
+  local deadline=$((SECONDS + timeout))
+  local url="${A2F_NIM_HTTP_READY_URL:-http://127.0.0.1:8000/v1/health/ready}"
+  local last_wait_log=0
+
+  log "waiting for NIM HTTP before starting native A2F pipeline: url=${url} timeout=${timeout}s"
+  while (( SECONDS < deadline )); do
+    if python3 - "$url" <<'PYNIMREADY' >/dev/null 2>&1
+import sys
+import urllib.request
+
+url = sys.argv[1]
+with urllib.request.urlopen(url, timeout=2) as response:
+    if 200 <= response.status < 500:
+        pass
+    else:
+        raise SystemExit(1)
+PYNIMREADY
+    then
+      return 0
+    fi
+    if (( SECONDS - last_wait_log >= 60 )); then
+      log "still waiting for NIM HTTP after ${SECONDS}s"
+      dump_a2f_diagnostics
+      last_wait_log=$SECONDS
+    fi
+    sleep "${A2F_NIM_HTTP_POLL_SEC:-5}"
+  done
+
+  log "timed out waiting for NIM HTTP readiness"
+  return 71
+}
+
 start_pyworker_after_a2f_boot() {
   local delay="${A2F_PYWORKER_START_DELAY_SEC:-45}"
   log "delaying PyWorker watcher for ${delay}s so NVIDIA A2F boots untouched"
@@ -172,18 +206,33 @@ start_pyworker_after_a2f_boot() {
     python3 /app/worker.py
 }
 
-start_native_a2f_pipeline() {
-  local delay="${A2F_NATIVE_START_DELAY_SEC:-0}"
+native_a2f_pipeline_supervisor() {
+  local delay="${A2F_NATIVE_START_DELAY_SEC:-60}"
+  local retry_delay="${A2F_NATIVE_RETRY_DELAY_SEC:-30}"
+  local attempt=1
+  local status=0
+
   if [ "$delay" != "0" ]; then
-    log "delaying native A2F pipeline for ${delay}s"
+    log "delaying native A2F pipeline supervisor for ${delay}s"
     sleep "$delay"
   fi
 
-  log "starting NVIDIA native A2F pipeline: /usr/local/bin/a2f_pipeline.run"
-  exec /usr/local/bin/a2f_pipeline.run \
-    --deployment-config /apps/configs/deployment_config.yaml \
-    --stylization-config /apps/configs/stylization_config.yaml \
-    --advanced-config /apps/configs/advanced_config.yaml
+  wait_for_nim_http || log "NIM HTTP did not report ready; trying native A2F pipeline anyway"
+
+  while true; do
+    log "starting NVIDIA native A2F pipeline attempt=${attempt}: /usr/local/bin/a2f_pipeline.run"
+    set +e
+    /usr/local/bin/a2f_pipeline.run \
+      --deployment-config /apps/configs/deployment_config.yaml \
+      --stylization-config /apps/configs/stylization_config.yaml \
+      --advanced-config /apps/configs/advanced_config.yaml
+    status=$?
+    set -e
+
+    log "NVIDIA native A2F pipeline exited status=${status}; retrying in ${retry_delay}s"
+    sleep "$retry_delay"
+    attempt=$((attempt + 1))
+  done
 }
 
 log "wrapper active build=${A2F_WRAPPER_BUILD:-unknown} cwd=$(pwd) LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-} PYTHONPATH=${PYTHONPATH:-}"
@@ -204,7 +253,7 @@ log "starting NVIDIA A2F startup script unchanged: /opt/nim/start_server.sh"
 /opt/nim/start_server.sh &
 nim_pid=$!
 
-start_native_a2f_pipeline &
+native_a2f_pipeline_supervisor &
 a2f_pid=$!
 
 while true; do
