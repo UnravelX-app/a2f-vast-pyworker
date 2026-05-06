@@ -21,24 +21,7 @@ configure_gstreamer() {
   mkdir -p /tmp/xdg-runtime-root /tmp/gstreamer-cache
   chmod 700 /tmp/xdg-runtime-root || true
   export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/xdg-runtime-root}"
-  export GST_REGISTRY="${GST_REGISTRY:-/tmp/gstreamer-cache/registry.bin}"
-  export LD_LIBRARY_PATH="/usr/local/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
-  ldconfig 2>/dev/null || true
-
-  if [[ -z "${GST_PLUGIN_SCANNER:-}" ]]; then
-    for scanner in \
-      /usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner \
-      /usr/lib/x86_64-linux-gnu/gstreamer-1.0/gst-plugin-scanner \
-      /usr/libexec/gstreamer-1.0/gst-plugin-scanner \
-      /usr/local/libexec/gstreamer-1.0/gst-plugin-scanner; do
-      if [[ -x "$scanner" ]]; then
-        export GST_PLUGIN_SCANNER="$scanner"
-        break
-      fi
-    done
-  fi
-
-  log "gstreamer env: build=${A2F_WRAPPER_BUILD:-unknown} GST_PLUGIN_SCANNER=${GST_PLUGIN_SCANNER:-} GST_REGISTRY=${GST_REGISTRY:-} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-} LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}"
+  log "base runtime env: build=${A2F_WRAPPER_BUILD:-unknown} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-} LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-} GST_PLUGIN_SCANNER=${GST_PLUGIN_SCANNER:-} GST_REGISTRY=${GST_REGISTRY:-}"
 }
 
 
@@ -64,7 +47,7 @@ mkdir -p "$(dirname "${PYWORKER_MODEL_LOG_FILE:-/var/log/portal/a2f-pyworker.log
 # Example A2F_START_CMD value after inspection:
 #   A2F_START_CMD='python3 -m inference'
 if [[ -n "${A2F_START_CMD:-}" ]]; then
-  log "starting A2F using A2F_START_CMD build=${A2F_WRAPPER_BUILD:-unknown} GST_PLUGIN_SCANNER=${GST_PLUGIN_SCANNER:-} LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}"
+  log "starting A2F using A2F_START_CMD build=${A2F_WRAPPER_BUILD:-unknown} cwd=$(pwd) LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}"
   bash -lc "$A2F_START_CMD" &
   A2F_PID=$!
 elif [[ "$#" -gt 0 ]]; then
