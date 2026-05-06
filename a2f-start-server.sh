@@ -54,6 +54,8 @@ start_pyworker_after_a2f_boot() {
 }
 
 log "stock /opt/nim/start_server.sh path active build=${A2F_WRAPPER_BUILD:-unknown} cwd=$(pwd) LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-} PYTHONPATH=${PYTHONPATH:-}"
+export NIM_USE_MODEL_MANIFEST_V0=False
+log "forcing NIM_USE_MODEL_MANIFEST_V0=${NIM_USE_MODEL_MANIFEST_V0}"
 start_pyworker_after_a2f_boot &
 
 # This is the stock NVIDIA /opt/nim/start_server.sh behavior.
