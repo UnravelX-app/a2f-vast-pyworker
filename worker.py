@@ -26,7 +26,7 @@ from typing import Any
 from vastai import BenchmarkConfig, HandlerConfig, LogActionConfig, Worker, WorkerConfig
 
 MODEL_SERVER_URL = os.getenv("PYWORKER_MODEL_SERVER_URL", "http://127.0.0.1")
-MODEL_SERVER_PORT = int(os.getenv("PYWORKER_MODEL_SERVER_PORT", "8000"))
+MODEL_SERVER_PORT = int(os.getenv("PYWORKER_MODEL_SERVER_PORT", "18002"))
 MODEL_LOG_FILE = os.getenv("PYWORKER_MODEL_LOG_FILE", "/var/log/portal/a2f-pyworker.log")
 
 A2F_HTTP_READY_URL = os.getenv("A2F_HTTP_READY_URL", "http://127.0.0.1:8000/v1/health/ready")
@@ -148,7 +148,7 @@ class HealthHandler(BaseHTTPRequestHandler):
 
     def _handle(self) -> None:
         status = _refresh_status()
-        if self.path in ("/", "/health", "/ready", "/v1/health/ready"):
+        if self.path in ("/", "/ping", "/health", "/ready", "/v1/health/ready"):
             self._send_json(200 if status["ready"] else 503, status)
             return
         if self.path == "/benchmark":
@@ -167,10 +167,10 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 
 def _start_probe_server() -> None:
-    # Vast's PyWorker SDK binds MODEL_SERVER_PORT for its own worker/session server.
-    # Readiness is reported through A2F_READY log_action, so do not bind a second
-    # local HTTP server here.
-    _log(INFO_LOG_PREFIX, "probe server disabled", worker_port=os.getenv("WORKER_PORT", ""), model_server_port=MODEL_SERVER_PORT)
+    server = ThreadingHTTPServer(("127.0.0.1", MODEL_SERVER_PORT), HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, name="a2f-probe-server", daemon=True)
+    thread.start()
+    _log(INFO_LOG_PREFIX, "probe server started", host="127.0.0.1", model_server_port=MODEL_SERVER_PORT, worker_port=os.getenv("WORKER_PORT", ""))
 
 
 def _workload(_: dict[str, Any]) -> float:

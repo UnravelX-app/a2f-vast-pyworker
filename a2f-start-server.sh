@@ -248,8 +248,8 @@ start_pyworker_after_a2f_boot() {
   log "starting Vast PyWorker"
   env \
     WORKER_PORT="${WORKER_PORT:-18000}" \
-    PYWORKER_MODEL_SERVER_PORT="${PYWORKER_MODEL_SERVER_PORT:-8000}" \
-    PYWORKER_MODEL_SERVER_URL="${PYWORKER_MODEL_SERVER_URL:-http://127.0.0.1}" \
+    PYWORKER_MODEL_SERVER_PORT="18002" \
+    PYWORKER_MODEL_SERVER_URL="http://127.0.0.1" \
     PYWORKER_MODEL_LOG_FILE="${PYWORKER_MODEL_LOG_FILE:-/var/log/portal/a2f-pyworker.log}" \
     PYTHONPATH="/tmp/pyworker-deps:${PYTHONPATH:-}" \
     python3 /app/worker.py
