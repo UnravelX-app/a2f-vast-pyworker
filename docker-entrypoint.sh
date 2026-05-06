@@ -47,7 +47,43 @@ EOF
   exit 64
 fi
 
-log "A2F pid=${A2F_PID}; starting Vast PyWorker"
+wait_for_a2f_ready() {
+  local timeout="${A2F_READY_TIMEOUT_SEC:-3600}"
+  local deadline=$((SECONDS + timeout))
+  local http_url="${A2F_HTTP_READY_URL:-http://127.0.0.1:8000/v1/health/ready}"
+  local grpc_host="${A2F_GRPC_HOST:-127.0.0.1}"
+  local grpc_port="${A2F_GRPC_PORT:-52000}"
+
+  log "waiting for A2F before starting PyWorker: http=${http_url} grpc=${grpc_host}:${grpc_port} timeout=${timeout}s"
+  while (( SECONDS < deadline )); do
+    if ! kill -0 "$A2F_PID" 2>/dev/null; then
+      wait "$A2F_PID"
+      local status=$?
+      log "A2F exited during startup with status ${status}"
+      exit "$status"
+    fi
+
+    if python3 - "$http_url" "$grpc_host" "$grpc_port" <<'PYREADY' >/dev/null 2>&1
+import socket, sys, urllib.request
+url, host, port = sys.argv[1], sys.argv[2], int(sys.argv[3])
+with urllib.request.urlopen(url, timeout=2) as resp:
+    if resp.status < 200 or resp.status >= 300:
+        raise SystemExit(1)
+with socket.create_connection((host, port), timeout=2):
+    pass
+PYREADY
+    then
+      log "A2F is ready; starting Vast PyWorker"
+      return 0
+    fi
+    sleep "${A2F_READY_POLL_SEC:-5}"
+  done
+
+  log "timed out waiting for A2F readiness"
+  exit 70
+}
+
+wait_for_a2f_ready
 python3 /app/worker.py &
 PYWORKER_PID=$!
 
