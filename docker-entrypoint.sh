@@ -19,6 +19,33 @@ log_runtime
 
 mkdir -p "$(dirname "${PYWORKER_MODEL_LOG_FILE:-/var/log/portal/a2f-pyworker.log}")" /workspace/a2f-cache
 
+warm_gstreamer_registry() {
+  mkdir -p /tmp/xdg-runtime-root /tmp/gstreamer-cache
+  chmod 700 /tmp/xdg-runtime-root || true
+  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/xdg-runtime-root}"
+  export GST_REGISTRY="${GST_REGISTRY:-/tmp/gstreamer-cache/registry.bin}"
+  export GST_PLUGIN_SCANNER="${GST_PLUGIN_SCANNER:-/usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner}"
+
+  local attempts="${GST_WARMUP_ATTEMPTS:-6}"
+  local i=1
+  while (( i <= attempts )); do
+    log "warming GStreamer registry attempt ${i}/${attempts}: GST_REGISTRY=${GST_REGISTRY} GST_PLUGIN_SCANNER=${GST_PLUGIN_SCANNER}"
+    if gst-inspect-1.0 --version >/dev/null 2>&1; then
+      log "GStreamer registry warm-up succeeded"
+      return 0
+    fi
+    log "GStreamer registry warm-up failed; retrying"
+    rm -f "$GST_REGISTRY"
+    sleep 2
+    i=$((i + 1))
+  done
+
+  log "GStreamer registry warm-up failed after ${attempts} attempts"
+  return 1
+}
+
+warm_gstreamer_registry
+
 wait_for_a2f_ready() {
   local timeout="${A2F_READY_TIMEOUT_SEC:-3600}"
   local deadline=$((SECONDS + timeout))

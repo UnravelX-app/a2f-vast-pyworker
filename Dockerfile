@@ -14,7 +14,8 @@ RUN chmod +x /app/docker-entrypoint.sh \
 WORKDIR /opt/nim
 
 ENV PYTHONUNBUFFERED=1 \
-    A2F_WRAPPER_BUILD=stock-a2f-runtime-v9
+    A2F_WRAPPER_BUILD=gst-warmup-v10 \
+    GST_WARMUP_ATTEMPTS=6
 
 EXPOSE 8000 52000 18000
 
