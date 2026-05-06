@@ -11,7 +11,7 @@ RUN chmod +x /opt/nim/start_server.sh \
 
 WORKDIR /opt/nim
 
-ENV A2F_WRAPPER_BUILD=stock-path-grpc-watcher-v19 \
+ENV A2F_WRAPPER_BUILD=stock-path-grpc-diagnostics-v21 \
     NIM_USE_MODEL_MANIFEST_V0=False \
     A2F_PYWORKER_START_DELAY_SEC=45
 

@@ -5,6 +5,124 @@ log() {
   printf '[a2f-entrypoint] %s\n' "$*" >&2
 }
 
+dump_a2f_diagnostics() {
+  python3 - <<'PYDIAG' >&2 || log "diagnostic snapshot failed"
+import os
+import socket
+
+KEYWORDS = ("start_server", "a2f", "audio2face", "nim", "grpc", "python")
+INTERESTING_PORTS = {8000, 52000, 18000}
+TCP_STATES = {
+    "01": "ESTABLISHED",
+    "02": "SYN_SENT",
+    "03": "SYN_RECV",
+    "04": "FIN_WAIT1",
+    "05": "FIN_WAIT2",
+    "06": "TIME_WAIT",
+    "07": "CLOSE",
+    "08": "CLOSE_WAIT",
+    "09": "LAST_ACK",
+    "0A": "LISTEN",
+}
+
+
+def read_text(path):
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError:
+        return b""
+
+
+def process_rows():
+    rows = []
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        cmd = read_text(f"/proc/{pid}/cmdline").replace(b"\0", b" ").decode("utf-8", "replace").strip()
+        comm = read_text(f"/proc/{pid}/comm").decode("utf-8", "replace").strip()
+        haystack = f"{comm} {cmd}".lower()
+        if any(keyword in haystack for keyword in KEYWORDS):
+            rows.append((pid, comm, cmd or comm))
+    return sorted(rows)
+
+
+def socket_owners():
+    owners = {}
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        comm = read_text(f"/proc/{pid}/comm").decode("utf-8", "replace").strip()
+        fd_dir = f"/proc/{pid}/fd"
+        try:
+            fds = os.listdir(fd_dir)
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                target = os.readlink(f"{fd_dir}/{fd}")
+            except OSError:
+                continue
+            if target.startswith("socket:[") and target.endswith("]"):
+                inode = target[8:-1]
+                owners.setdefault(inode, set()).add(f"{pid}/{comm}")
+    return owners
+
+
+def decode_ipv4(hex_addr):
+    try:
+        return socket.inet_ntop(socket.AF_INET, bytes.fromhex(hex_addr)[::-1])
+    except OSError:
+        return hex_addr
+
+
+def tcp_rows(path, family, owners):
+    rows = []
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            lines = fh.readlines()[1:]
+    except OSError:
+        return rows
+    for line in lines:
+        fields = line.split()
+        if len(fields) < 10:
+            continue
+        local, state, inode = fields[1], fields[3], fields[9]
+        addr_hex, port_hex = local.split(":")
+        port = int(port_hex, 16)
+        if state != "0A" and port not in INTERESTING_PORTS:
+            continue
+        if family == "tcp4":
+            addr = decode_ipv4(addr_hex)
+        else:
+            addr = addr_hex
+        owner = ",".join(sorted(owners.get(inode, ()))) or "-"
+        rows.append((port, family, addr, TCP_STATES.get(state, state), owner))
+    return rows
+
+
+print("diagnostic: process snapshot")
+rows = process_rows()
+if rows:
+    for pid, comm, cmd in rows:
+        print(f"  pid={pid} comm={comm} cmd={cmd[:260]}")
+else:
+    print("  no matching A2F/NIM/gRPC/python processes found")
+
+print("diagnostic: listening tcp ports")
+owners = socket_owners()
+rows = tcp_rows("/proc/net/tcp", "tcp4", owners) + tcp_rows("/proc/net/tcp6", "tcp6", owners)
+if rows:
+    for port, family, addr, state, owner in sorted(rows):
+        marker = " *" if port in INTERESTING_PORTS else ""
+        print(f"  {family} {addr}:{port} {state} owner={owner}{marker}")
+else:
+    print("  no tcp listeners found")
+PYDIAG
+}
+
 wait_for_a2f_ready() {
   local timeout="${A2F_READY_TIMEOUT_SEC:-3600}"
   local deadline=$((SECONDS + timeout))
@@ -25,6 +143,7 @@ PYREADY
     fi
     if (( SECONDS - last_wait_log >= 60 )); then
       log "still waiting for A2F readiness after ${SECONDS}s"
+      dump_a2f_diagnostics
       last_wait_log=$SECONDS
     fi
     sleep "${A2F_READY_POLL_SEC:-5}"
