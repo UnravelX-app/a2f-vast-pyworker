@@ -8,19 +8,15 @@ log() {
 wait_for_a2f_ready() {
   local timeout="${A2F_READY_TIMEOUT_SEC:-3600}"
   local deadline=$((SECONDS + timeout))
-  local http_url="${A2F_HTTP_READY_URL:-http://127.0.0.1:8000/v1/health/ready}"
   local grpc_host="${A2F_GRPC_HOST:-127.0.0.1}"
   local grpc_port="${A2F_GRPC_PORT:-52000}"
   local last_wait_log=0
 
-  log "waiting for A2F before starting PyWorker: http=${http_url} grpc=${grpc_host}:${grpc_port} timeout=${timeout}s"
+  log "waiting for A2F gRPC before starting PyWorker: grpc=${grpc_host}:${grpc_port} timeout=${timeout}s"
   while (( SECONDS < deadline )); do
-    if python3 - "$http_url" "$grpc_host" "$grpc_port" <<'PYREADY' >/dev/null 2>&1
-import socket, sys, urllib.request
-url, host, port = sys.argv[1], sys.argv[2], int(sys.argv[3])
-with urllib.request.urlopen(url, timeout=2) as resp:
-    if resp.status < 200 or resp.status >= 300:
-        raise SystemExit(1)
+    if python3 - "$grpc_host" "$grpc_port" <<'PYREADY' >/dev/null 2>&1
+import socket, sys
+host, port = sys.argv[1], int(sys.argv[2])
 with socket.create_connection((host, port), timeout=2):
     pass
 PYREADY

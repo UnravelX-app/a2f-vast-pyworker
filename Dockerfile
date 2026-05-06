@@ -10,7 +10,7 @@ RUN chmod +x /app/a2f-start-server.sh
 
 WORKDIR /opt/nim
 
-ENV A2F_WRAPPER_BUILD=delayed-pyworker-v14 \
+ENV A2F_WRAPPER_BUILD=grpc-only-watcher-v15 \
     A2F_PYWORKER_START_DELAY_SEC=45 \
     SERVER_START_SCRIPT_PATH=/app/a2f-start-server.sh
 
