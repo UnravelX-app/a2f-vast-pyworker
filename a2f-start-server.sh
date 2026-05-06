@@ -172,10 +172,44 @@ start_pyworker_after_a2f_boot() {
     python3 /app/worker.py
 }
 
-log "stock /opt/nim/start_server.sh path active build=${A2F_WRAPPER_BUILD:-unknown} cwd=$(pwd) LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-} PYTHONPATH=${PYTHONPATH:-}"
+log "wrapper active build=${A2F_WRAPPER_BUILD:-unknown} cwd=$(pwd) LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-} PYTHONPATH=${PYTHONPATH:-}"
 export NIM_USE_MODEL_MANIFEST_V0=False
 log "forcing NIM_USE_MODEL_MANIFEST_V0=${NIM_USE_MODEL_MANIFEST_V0}"
-start_pyworker_after_a2f_boot &
 
-# This is the stock NVIDIA /opt/nim/start_server.sh behavior.
-start_server
+terminate_children() {
+  log "received shutdown; stopping child processes"
+  kill "${pyworker_pid:-}" "${a2f_pid:-}" 2>/dev/null || true
+}
+
+trap terminate_children INT TERM
+
+start_pyworker_after_a2f_boot &
+pyworker_pid=$!
+
+log "starting NVIDIA A2F startup script unchanged: /opt/nim/start_server.sh"
+/opt/nim/start_server.sh &
+a2f_pid=$!
+
+while true; do
+  if ! kill -0 "$a2f_pid" 2>/dev/null; then
+    set +e
+    wait "$a2f_pid"
+    status=$?
+    set -e
+    log "NVIDIA A2F startup script exited status=${status}"
+    kill "$pyworker_pid" 2>/dev/null || true
+    exit "$status"
+  fi
+
+  if ! kill -0 "$pyworker_pid" 2>/dev/null; then
+    set +e
+    wait "$pyworker_pid"
+    status=$?
+    set -e
+    log "PyWorker watcher exited status=${status}"
+    kill "$a2f_pid" 2>/dev/null || true
+    exit "$status"
+  fi
+
+  sleep 2
+done

@@ -5,14 +5,16 @@ USER root
 WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 COPY worker.py /app/worker.py
-COPY a2f-start-server.sh /opt/nim/start_server.sh
-RUN chmod +x /opt/nim/start_server.sh \
+COPY a2f-start-server.sh /app/a2f-entrypoint.sh
+RUN chmod +x /app/a2f-entrypoint.sh \
     && mkdir -p /var/log/portal
 
 WORKDIR /opt/nim
 
-ENV A2F_WRAPPER_BUILD=stock-path-grpc-diagnostics-v21 \
+ENV A2F_WRAPPER_BUILD=stock-script-untouched-v23 \
     NIM_USE_MODEL_MANIFEST_V0=False \
     A2F_PYWORKER_START_DELAY_SEC=45
 
 EXPOSE 8000 52000 18000
+
+ENTRYPOINT ["/app/a2f-entrypoint.sh"]
