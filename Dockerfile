@@ -5,14 +5,13 @@ USER root
 WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 COPY worker.py /app/worker.py
-COPY a2f-start-server.sh /app/a2f-start-server.sh
-RUN chmod +x /app/a2f-start-server.sh
+COPY a2f-start-server.sh /opt/nim/start_server.sh
+RUN chmod +x /opt/nim/start_server.sh \
+    && mkdir -p /var/log/portal
 
 WORKDIR /opt/nim
 
-ENV A2F_WRAPPER_BUILD=grpc-only-watcher-v16 \
-    A2F_PYWORKER_START_DELAY_SEC=45 \
-    NIM_USE_MODEL_MANIFEST_V0=True \
-    SERVER_START_SCRIPT_PATH=/app/a2f-start-server.sh
+ENV A2F_WRAPPER_BUILD=stock-path-grpc-watcher-v18 \
+    A2F_PYWORKER_START_DELAY_SEC=45
 
 EXPOSE 8000 52000 18000
