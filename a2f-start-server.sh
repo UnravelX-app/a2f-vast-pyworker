@@ -103,7 +103,20 @@ def tcp_rows(path, family, owners):
     return rows
 
 
-print("diagnostic: process snapshot")
+print("diagnostic: ALL processes")
+all_procs = []
+for name in os.listdir("/proc"):
+    if not name.isdigit():
+        continue
+    pid = int(name)
+    cmd = read_text(f"/proc/{pid}/cmdline").replace(b"\0", b" ").decode("utf-8", "replace").strip()
+    comm = read_text(f"/proc/{pid}/comm").decode("utf-8", "replace").strip()
+    if cmd or comm:
+        all_procs.append((pid, comm, cmd or comm))
+for pid, comm, cmd in sorted(all_procs):
+    print(f"  pid={pid} comm={comm} cmd={cmd[:200]}")
+
+print("diagnostic: keyword process snapshot")
 rows = process_rows()
 if rows:
     for pid, comm, cmd in rows:
@@ -160,19 +173,60 @@ try:
 except Exception as exc:
     print(f"  libcuda error={type(exc).__name__}: {exc}")
 
-print("diagnostic: triton workspace logs")
+print("diagnostic: start_server open files")
 import glob as _glob
-for pattern in ("/opt/nim/workspace/logs/*.log", "/opt/nim/workspace/logs/*.txt",
-                "/tmp/triton*.log", "/tmp/a2f*.log"):
+start_server_pid = None
+for name in os.listdir("/proc"):
+    if not name.isdigit():
+        continue
+    comm = read_text(f"/proc/{name}/comm").decode("utf-8", "replace").strip()
+    if comm == "start_server":
+        start_server_pid = name
+        break
+if start_server_pid:
+    fd_dir = f"/proc/{start_server_pid}/fd"
+    try:
+        for fd in sorted(os.listdir(fd_dir)):
+            try:
+                target = os.readlink(f"{fd_dir}/{fd}")
+                if target not in ("socket:[...]",) and not target.startswith("anon_inode") and not target.startswith("pipe"):
+                    print(f"  fd={fd} -> {target}")
+            except OSError:
+                pass
+    except OSError as exc:
+        print(f"  cannot read fd dir: {exc}")
+else:
+    print("  start_server process not found")
+
+print("diagnostic: nim/triton log files")
+for pattern in (
+    "/opt/nim/logs/*.log", "/opt/nim/logs/*.txt",
+    "/opt/nim/workspace/logs/*.log", "/opt/nim/workspace/logs/*.txt",
+    "/var/log/nim/*.log",
+    "/tmp/triton*.log", "/tmp/a2f*.log", "/tmp/nim*.log",
+):
     for fpath in _glob.glob(pattern):
         try:
             with open(fpath, "rb") as fh:
-                tail = fh.read()[-1500:]
-            print(f"  {fpath} (last 1500 bytes):")
-            for ln in tail.decode("utf-8", "replace").splitlines()[-30:]:
+                tail = fh.read()[-2000:]
+            lines = tail.decode("utf-8", "replace").splitlines()[-40:]
+            print(f"  === {fpath} (last {len(lines)} lines) ===")
+            for ln in lines:
                 print(f"    {ln}")
         except Exception as exc:
             print(f"  {fpath} read error: {exc}")
+
+print("diagnostic: find recent log files under /opt/nim")
+try:
+    import subprocess as _sp
+    r = _sp.run(
+        ["find", "/opt/nim", "-name", "*.log", "-newer", "/opt/nim/workspace", "-type", "f"],
+        capture_output=True, text=True, timeout=5,
+    )
+    for line in (r.stdout.strip().splitlines() or ["  none found"]):
+        print(f"  {line}")
+except Exception as exc:
+    print(f"  find error: {exc}")
 PYDIAG
 }
 
