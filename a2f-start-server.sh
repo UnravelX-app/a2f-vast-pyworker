@@ -248,7 +248,7 @@ start_pyworker_after_a2f_boot() {
   log "starting Vast PyWorker"
   env \
     WORKER_PORT="${WORKER_PORT:-18000}" \
-    PYWORKER_MODEL_SERVER_PORT="${PYWORKER_MODEL_SERVER_PORT:-18000}" \
+    PYWORKER_MODEL_SERVER_PORT="${PYWORKER_MODEL_SERVER_PORT:-8000}" \
     PYWORKER_MODEL_SERVER_URL="${PYWORKER_MODEL_SERVER_URL:-http://127.0.0.1}" \
     PYWORKER_MODEL_LOG_FILE="${PYWORKER_MODEL_LOG_FILE:-/var/log/portal/a2f-pyworker.log}" \
     PYTHONPATH="/tmp/pyworker-deps:${PYTHONPATH:-}" \
@@ -261,6 +261,24 @@ if [ "${NIM_SKIP_A2F_START:-}" = "true" ] || [ "${NIM_SKIP_A2F_START:-}" = "1" ]
   log "unsetting NIM_SKIP_A2F_START so NVIDIA start_server can launch gRPC on 52000"
   unset NIM_SKIP_A2F_START
 fi
+
+mkdir -p /tmp/xdg-runtime-root /tmp/gstreamer-cache
+chmod 700 /tmp/xdg-runtime-root || true
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/xdg-runtime-root}"
+export GST_REGISTRY="${GST_REGISTRY:-/tmp/gstreamer-cache/registry.bin}"
+export GST_PLUGIN_SCANNER="${GST_PLUGIN_SCANNER:-/usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner}"
+_gst_attempts="${GST_WARMUP_ATTEMPTS:-6}"
+_gst_i=1
+while (( _gst_i <= _gst_attempts )); do
+  log "warming GStreamer registry attempt ${_gst_i}/${_gst_attempts}"
+  if gst-inspect-1.0 --version >/dev/null 2>&1; then
+    log "GStreamer registry warm-up succeeded"
+    break
+  fi
+  rm -f "$GST_REGISTRY"
+  sleep 2
+  _gst_i=$(( _gst_i + 1 ))
+done
 
 start_pyworker_after_a2f_boot &
 pyworker_pid=$!

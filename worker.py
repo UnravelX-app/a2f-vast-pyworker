@@ -26,7 +26,7 @@ from typing import Any
 from vastai import BenchmarkConfig, HandlerConfig, LogActionConfig, Worker, WorkerConfig
 
 MODEL_SERVER_URL = os.getenv("PYWORKER_MODEL_SERVER_URL", "http://127.0.0.1")
-MODEL_SERVER_PORT = int(os.getenv("PYWORKER_MODEL_SERVER_PORT", "18001"))
+MODEL_SERVER_PORT = int(os.getenv("PYWORKER_MODEL_SERVER_PORT", "8000"))
 MODEL_LOG_FILE = os.getenv("PYWORKER_MODEL_LOG_FILE", "/var/log/portal/a2f-pyworker.log")
 
 A2F_HTTP_READY_URL = os.getenv("A2F_HTTP_READY_URL", "http://127.0.0.1:8000/v1/health/ready")
@@ -189,7 +189,7 @@ def main() -> None:
         model_log_file=MODEL_LOG_FILE,
         handlers=[
             HandlerConfig(
-                route="/benchmark",
+                route="/ping",
                 allow_parallel_requests=True,
                 max_queue_time=3600.0,
                 workload_calculator=_workload,
@@ -198,18 +198,6 @@ def main() -> None:
                     runs=1,
                     concurrency=1,
                 ),
-            ),
-            HandlerConfig(
-                route="/health",
-                allow_parallel_requests=True,
-                max_queue_time=30.0,
-                workload_calculator=_workload,
-            ),
-            HandlerConfig(
-                route="/ready",
-                allow_parallel_requests=True,
-                max_queue_time=30.0,
-                workload_calculator=_workload,
             ),
         ],
         log_action_config=LogActionConfig(
