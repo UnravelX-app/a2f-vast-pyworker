@@ -17,6 +17,42 @@ shutdown() {
 }
 trap shutdown TERM INT
 
+configure_gstreamer() {
+  mkdir -p /tmp/xdg-runtime-root /tmp/gstreamer-cache
+  chmod 700 /tmp/xdg-runtime-root || true
+  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/xdg-runtime-root}"
+  export GST_REGISTRY="${GST_REGISTRY:-/tmp/gstreamer-cache/registry.bin}"
+
+  if [[ -z "${GST_PLUGIN_SCANNER:-}" ]]; then
+    for scanner in \
+      /usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner \
+      /usr/lib/x86_64-linux-gnu/gstreamer-1.0/gst-plugin-scanner \
+      /usr/libexec/gstreamer-1.0/gst-plugin-scanner \
+      /usr/local/libexec/gstreamer-1.0/gst-plugin-scanner; do
+      if [[ -x "$scanner" ]]; then
+        export GST_PLUGIN_SCANNER="$scanner"
+        break
+      fi
+    done
+  fi
+
+  log "gstreamer env: GST_PLUGIN_SCANNER=${GST_PLUGIN_SCANNER:-} GST_REGISTRY=${GST_REGISTRY:-} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-}"
+}
+
+
+log_runtime() {
+  log "runtime env: WORKER_PORT=${WORKER_PORT:-} MODEL_SERVER_PORT=${MODEL_SERVER_PORT:-} PYWORKER_MODEL_SERVER_PORT=${PYWORKER_MODEL_SERVER_PORT:-} CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-} NIM_TAGS_SELECTOR=${NIM_TAGS_SELECTOR:-} NIM_MODEL_PROFILE=${NIM_MODEL_PROFILE:-}"
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    nvidia-smi -L >&2 || true
+    nvidia-smi --query-gpu=name,pci.device_id,memory.total,driver_version --format=csv,noheader >&2 || true
+  else
+    log "nvidia-smi not found"
+  fi
+}
+
+configure_gstreamer
+log_runtime
+
 mkdir -p "$(dirname "${PYWORKER_MODEL_LOG_FILE:-/var/log/portal/a2f-pyworker.log}")" /workspace/a2f-cache
 
 # Start A2F NIM. There are two supported modes:
@@ -55,6 +91,7 @@ wait_for_a2f_ready() {
   local grpc_port="${A2F_GRPC_PORT:-52000}"
 
   log "waiting for A2F before starting PyWorker: http=${http_url} grpc=${grpc_host}:${grpc_port} timeout=${timeout}s"
+  local last_wait_log=0
   while (( SECONDS < deadline )); do
     if ! kill -0 "$A2F_PID" 2>/dev/null; then
       wait "$A2F_PID"
@@ -76,6 +113,10 @@ PYREADY
       log "A2F is ready; starting Vast PyWorker"
       return 0
     fi
+    if (( SECONDS - last_wait_log >= 60 )); then
+      log "still waiting for A2F readiness after ${SECONDS}s"
+      last_wait_log=$SECONDS
+    fi
     sleep "${A2F_READY_POLL_SEC:-5}"
   done
 
@@ -84,7 +125,7 @@ PYREADY
 }
 
 wait_for_a2f_ready
-python3 /app/worker.py &
+/opt/pyworker-venv/bin/python /app/worker.py &
 PYWORKER_PID=$!
 
 # Keep the wrapper alive while either process is alive. If one exits, stop the
