@@ -11,7 +11,7 @@ RUN chmod +x /app/a2f-entrypoint.sh \
 
 WORKDIR /opt/nim
 
-ENV A2F_WRAPPER_BUILD=stock-script-untouched-v23 \
+ENV A2F_WRAPPER_BUILD=stock-script-native-a2f-v24 \
     NIM_USE_MODEL_MANIFEST_V0=False \
     A2F_PYWORKER_START_DELAY_SEC=45
 

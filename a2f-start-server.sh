@@ -172,13 +172,27 @@ start_pyworker_after_a2f_boot() {
     python3 /app/worker.py
 }
 
+start_native_a2f_pipeline() {
+  local delay="${A2F_NATIVE_START_DELAY_SEC:-0}"
+  if [ "$delay" != "0" ]; then
+    log "delaying native A2F pipeline for ${delay}s"
+    sleep "$delay"
+  fi
+
+  log "starting NVIDIA native A2F pipeline: /usr/local/bin/a2f_pipeline.run"
+  exec /usr/local/bin/a2f_pipeline.run \
+    --deployment-config /apps/configs/deployment_config.yaml \
+    --stylization-config /apps/configs/stylization_config.yaml \
+    --advanced-config /apps/configs/advanced_config.yaml
+}
+
 log "wrapper active build=${A2F_WRAPPER_BUILD:-unknown} cwd=$(pwd) LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-} PYTHONPATH=${PYTHONPATH:-}"
 export NIM_USE_MODEL_MANIFEST_V0=False
 log "forcing NIM_USE_MODEL_MANIFEST_V0=${NIM_USE_MODEL_MANIFEST_V0}"
 
 terminate_children() {
   log "received shutdown; stopping child processes"
-  kill "${pyworker_pid:-}" "${a2f_pid:-}" 2>/dev/null || true
+  kill "${pyworker_pid:-}" "${nim_pid:-}" "${a2f_pid:-}" 2>/dev/null || true
 }
 
 trap terminate_children INT TERM
@@ -188,16 +202,29 @@ pyworker_pid=$!
 
 log "starting NVIDIA A2F startup script unchanged: /opt/nim/start_server.sh"
 /opt/nim/start_server.sh &
+nim_pid=$!
+
+start_native_a2f_pipeline &
 a2f_pid=$!
 
 while true; do
+  if ! kill -0 "$nim_pid" 2>/dev/null; then
+    set +e
+    wait "$nim_pid"
+    status=$?
+    set -e
+    log "NVIDIA NIM startup script exited status=${status}"
+    kill "$pyworker_pid" "$a2f_pid" 2>/dev/null || true
+    exit "$status"
+  fi
+
   if ! kill -0 "$a2f_pid" 2>/dev/null; then
     set +e
     wait "$a2f_pid"
     status=$?
     set -e
-    log "NVIDIA A2F startup script exited status=${status}"
-    kill "$pyworker_pid" 2>/dev/null || true
+    log "NVIDIA native A2F pipeline exited status=${status}"
+    kill "$pyworker_pid" "$nim_pid" 2>/dev/null || true
     exit "$status"
   fi
 
@@ -207,7 +234,7 @@ while true; do
     status=$?
     set -e
     log "PyWorker watcher exited status=${status}"
-    kill "$a2f_pid" 2>/dev/null || true
+    kill "$nim_pid" "$a2f_pid" 2>/dev/null || true
     exit "$status"
   fi
 
