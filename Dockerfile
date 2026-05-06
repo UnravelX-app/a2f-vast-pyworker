@@ -6,12 +6,12 @@ WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 COPY worker.py /app/worker.py
 COPY a2f-start-server.sh /app/a2f-start-server.sh
-RUN chmod +x /app/a2f-start-server.sh \
-    && mkdir -p /var/log/portal /workspace/a2f-cache
+RUN chmod +x /app/a2f-start-server.sh
 
 WORKDIR /opt/nim
 
-ENV A2F_WRAPPER_BUILD=stock-entrypoint-v11 \
+ENV A2F_WRAPPER_BUILD=delayed-pyworker-v14 \
+    A2F_PYWORKER_START_DELAY_SEC=45 \
     SERVER_START_SCRIPT_PATH=/app/a2f-start-server.sh
 
 EXPOSE 8000 52000 18000
