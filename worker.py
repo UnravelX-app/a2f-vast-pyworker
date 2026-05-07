@@ -94,7 +94,7 @@ def _check_grpc_tcp(timeout: float = 2.0) -> tuple[bool, str]:
 def _refresh_status() -> dict[str, Any]:
     http_ok, http_msg = _check_http_ready()
     grpc_ok, grpc_msg = _check_grpc_tcp()
-    ready = http_ok
+    ready = http_ok and grpc_ok
     _last_status.update(
         {
             "ready": ready,
