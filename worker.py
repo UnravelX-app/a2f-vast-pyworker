@@ -28,6 +28,7 @@ from vastai import BenchmarkConfig, HandlerConfig, LogActionConfig, Worker, Work
 MODEL_SERVER_URL = os.getenv("PYWORKER_MODEL_SERVER_URL", "http://127.0.0.1")
 MODEL_SERVER_PORT = int(os.getenv("PYWORKER_MODEL_SERVER_PORT", "18002"))
 MODEL_LOG_FILE = os.getenv("PYWORKER_MODEL_LOG_FILE", "/var/log/portal/a2f-pyworker.log")
+WORKER_PORT = int(os.getenv("WORKER_PORT", "18000"))
 
 A2F_HTTP_READY_URL = os.getenv("A2F_HTTP_READY_URL", "http://127.0.0.1:8000/v1/health/ready")
 A2F_GRPC_HOST = os.getenv("A2F_GRPC_HOST", "127.0.0.1")
@@ -195,6 +196,32 @@ def _start_probe_server() -> None:
     _log(INFO_LOG_PREFIX, "probe server started", host="127.0.0.1", model_server_port=MODEL_SERVER_PORT, worker_port=os.getenv("WORKER_PORT", ""))
 
 
+def _has_grpc_connections() -> bool:
+    try:
+        import psutil
+        for conn in psutil.net_connections(kind="tcp"):
+            if conn.laddr.port == A2F_GRPC_PORT and conn.status == "ESTABLISHED":
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _grpc_activity_watcher() -> None:
+    """Ping the Vast worker endpoint whenever active gRPC connections are detected on port 52000."""
+    ping_url = f"http://127.0.0.1:{WORKER_PORT}/ping"
+    while True:
+        try:
+            if _has_grpc_connections():
+                req = urllib.request.Request(ping_url, method="POST", data=b"{}")
+                req.add_header("Content-Type", "application/json")
+                with urllib.request.urlopen(req, timeout=2):
+                    pass
+        except Exception:
+            pass
+        time.sleep(10)
+
+
 def _workload(_: dict[str, Any]) -> float:
     return 1.0
 
@@ -204,6 +231,7 @@ def main() -> None:
     _log(INFO_LOG_PREFIX, "pyworker starting")
     _start_probe_server()
     threading.Thread(target=_readiness_watcher, name="a2f-readiness", daemon=True).start()
+    threading.Thread(target=_grpc_activity_watcher, name="a2f-grpc-activity", daemon=True).start()
 
     worker_config = WorkerConfig(
         model_server_url=MODEL_SERVER_URL,

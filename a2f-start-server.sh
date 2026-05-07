@@ -47,6 +47,11 @@ start_pyworker_after_a2f_boot() {
     python3 /app/worker.py
 }
 
+_LOG_FILE="${PYWORKER_MODEL_LOG_FILE:-/var/log/portal/a2f-pyworker.log}"
+mkdir -p "$(dirname "$_LOG_FILE")"
+> "$_LOG_FILE"
+unset _LOG_FILE
+
 log "wrapper active build=${A2F_WRAPPER_BUILD:-unknown}"
 
 if [ "${NIM_SKIP_A2F_START:-}" = "true" ] || [ "${NIM_SKIP_A2F_START:-}" = "1" ]; then
