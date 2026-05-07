@@ -57,4 +57,8 @@ start_pyworker_after_a2f_boot &
 
 export SERVER_START_SCRIPT_PATH="${SERVER_START_SCRIPT_PATH:-/opt/nim/start_server.sh}"
 log "exec NVIDIA A2F startup: /bin/bash -c ${SERVER_START_SCRIPT_PATH}"
+# Unset any GStreamer env vars that may have been injected by Vast.ai instance config.
+# GST_REGISTRY_FORK=no in particular causes GStreamer to scan plugins in-process,
+# which triggers a GLib pthread_setspecific crash in the NIM's threading model.
+unset GST_REGISTRY GST_REGISTRY_FORK GST_PLUGIN_SCANNER GST_DEBUG
 exec /bin/bash -c "$SERVER_START_SCRIPT_PATH"
