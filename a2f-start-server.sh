@@ -5,215 +5,12 @@ log() {
   printf '[a2f-entrypoint] %s\n' "$*" >&2
 }
 
-dump_a2f_diagnostics() {
-  python3 - <<'PYDIAG' >&2 || log "diagnostic snapshot failed"
-import os
-import socket
-
-KEYWORDS = ("start_server", "a2f", "audio2face", "nim", "grpc", "python", "triton")
-INTERESTING_PORTS = {8000, 52000, 18000}
-TCP_STATES = {
-    "01": "ESTABLISHED",
-    "02": "SYN_SENT",
-    "03": "SYN_RECV",
-    "04": "FIN_WAIT1",
-    "05": "FIN_WAIT2",
-    "06": "TIME_WAIT",
-    "07": "CLOSE",
-    "08": "CLOSE_WAIT",
-    "09": "LAST_ACK",
-    "0A": "LISTEN",
-}
-
-
-def read_text(path):
-    try:
-        with open(path, "rb") as fh:
-            return fh.read()
-    except OSError:
-        return b""
-
-
-def process_rows():
-    rows = []
-    for name in os.listdir("/proc"):
-        if not name.isdigit():
-            continue
-        pid = int(name)
-        cmd = read_text(f"/proc/{pid}/cmdline").replace(b"\0", b" ").decode("utf-8", "replace").strip()
-        comm = read_text(f"/proc/{pid}/comm").decode("utf-8", "replace").strip()
-        haystack = f"{comm} {cmd}".lower()
-        if any(keyword in haystack for keyword in KEYWORDS):
-            rows.append((pid, comm, cmd or comm))
-    return sorted(rows)
-
-
-def socket_owners():
-    owners = {}
-    for name in os.listdir("/proc"):
-        if not name.isdigit():
-            continue
-        pid = int(name)
-        comm = read_text(f"/proc/{pid}/comm").decode("utf-8", "replace").strip()
-        fd_dir = f"/proc/{pid}/fd"
-        try:
-            fds = os.listdir(fd_dir)
-        except OSError:
-            continue
-        for fd in fds:
-            try:
-                target = os.readlink(f"{fd_dir}/{fd}")
-            except OSError:
-                continue
-            if target.startswith("socket:[") and target.endswith("]"):
-                inode = target[8:-1]
-                owners.setdefault(inode, set()).add(f"{pid}/{comm}")
-    return owners
-
-
-def decode_ipv4(hex_addr):
-    try:
-        return socket.inet_ntop(socket.AF_INET, bytes.fromhex(hex_addr)[::-1])
-    except OSError:
-        return hex_addr
-
-
-def tcp_rows(path, family, owners):
-    rows = []
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            lines = fh.readlines()[1:]
-    except OSError:
-        return rows
-    for line in lines:
-        fields = line.split()
-        if len(fields) < 10:
-            continue
-        local, state, inode = fields[1], fields[3], fields[9]
-        addr_hex, port_hex = local.split(":")
-        port = int(port_hex, 16)
-        if state != "0A" and port not in INTERESTING_PORTS:
-            continue
-        if family == "tcp4":
-            addr = decode_ipv4(addr_hex)
-        else:
-            addr = addr_hex
-        owner = ",".join(sorted(owners.get(inode, ()))) or "-"
-        rows.append((port, family, addr, TCP_STATES.get(state, state), owner))
-    return rows
-
-
-print("diagnostic: ALL processes")
-all_procs = []
-for name in os.listdir("/proc"):
-    if not name.isdigit():
-        continue
-    pid = int(name)
-    cmd = read_text(f"/proc/{pid}/cmdline").replace(b"\0", b" ").decode("utf-8", "replace").strip()
-    comm = read_text(f"/proc/{pid}/comm").decode("utf-8", "replace").strip()
-    if cmd or comm:
-        all_procs.append((pid, comm, cmd or comm))
-for pid, comm, cmd in sorted(all_procs):
-    print(f"  pid={pid} comm={comm} cmd={cmd[:200]}")
-
-print("diagnostic: keyword process snapshot")
-rows = process_rows()
-if rows:
-    for pid, comm, cmd in rows:
-        print(f"  pid={pid} comm={comm} cmd={cmd[:260]}")
-else:
-    print("  no matching A2F/NIM/gRPC/python/triton processes found")
-
-print("diagnostic: listening tcp ports")
-owners = socket_owners()
-rows = tcp_rows("/proc/net/tcp", "tcp4", owners) + tcp_rows("/proc/net/tcp6", "tcp6", owners)
-if rows:
-    for port, family, addr, state, owner in sorted(rows):
-        marker = " *" if port in INTERESTING_PORTS else ""
-        print(f"  {family} {addr}:{port} {state} owner={owner}{marker}")
-else:
-    print("  no tcp listeners found")
-
-import urllib.request, urllib.error, subprocess
-
-print("diagnostic: a2f http health")
-try:
-    with urllib.request.urlopen("http://127.0.0.1:8000/v1/health/ready", timeout=2) as resp:
-        body = resp.read(512).decode("utf-8", "replace")
-        print(f"  status={resp.status} body={body[:400]}")
-except urllib.error.HTTPError as exc:
-    try:
-        body = exc.read(512).decode("utf-8", "replace")
-    except Exception:
-        body = ""
-    print(f"  http_error={exc.code} body={body[:400]}")
-except Exception as exc:
-    print(f"  error={type(exc).__name__}: {exc}")
-
-print("diagnostic: start_server open files")
-import glob as _glob
-start_server_pid = None
-for name in os.listdir("/proc"):
-    if not name.isdigit():
-        continue
-    comm = read_text(f"/proc/{name}/comm").decode("utf-8", "replace").strip()
-    if comm == "start_server":
-        start_server_pid = name
-        break
-if start_server_pid:
-    fd_dir = f"/proc/{start_server_pid}/fd"
-    try:
-        for fd in sorted(os.listdir(fd_dir)):
-            try:
-                target = os.readlink(f"{fd_dir}/{fd}")
-                if target not in ("socket:[...]",) and not target.startswith("anon_inode") and not target.startswith("pipe"):
-                    print(f"  fd={fd} -> {target}")
-            except OSError:
-                pass
-    except OSError as exc:
-        print(f"  cannot read fd dir: {exc}")
-else:
-    print("  start_server process not found")
-
-print("diagnostic: nim/triton log files")
-for pattern in (
-    "/opt/nim/logs/*.log", "/opt/nim/logs/*.txt",
-    "/opt/nim/workspace/logs/*.log", "/opt/nim/workspace/logs/*.txt",
-    "/var/log/nim/*.log",
-    "/tmp/triton*.log", "/tmp/a2f*.log", "/tmp/nim*.log",
-):
-    for fpath in _glob.glob(pattern):
-        try:
-            with open(fpath, "rb") as fh:
-                tail = fh.read()[-2000:]
-            lines = tail.decode("utf-8", "replace").splitlines()[-40:]
-            print(f"  === {fpath} (last {len(lines)} lines) ===")
-            for ln in lines:
-                print(f"    {ln}")
-        except Exception as exc:
-            print(f"  {fpath} read error: {exc}")
-
-print("diagnostic: find recent log files under /opt/nim")
-try:
-    import subprocess as _sp
-    r = _sp.run(
-        ["find", "/opt/nim", "-name", "*.log", "-newer", "/opt/nim/workspace", "-type", "f"],
-        capture_output=True, text=True, timeout=5,
-    )
-    for line in (r.stdout.strip().splitlines() or ["  none found"]):
-        print(f"  {line}")
-except Exception as exc:
-    print(f"  find error: {exc}")
-PYDIAG
-}
-
 wait_for_a2f_ready() {
   local timeout="${A2F_READY_TIMEOUT_SEC:-3600}"
   local deadline=$((SECONDS + timeout))
   local http_url="${A2F_HTTP_READY_URL:-http://127.0.0.1:8000/v1/health/ready}"
-  local last_wait_log=0
 
-  log "waiting for A2F HTTP readiness before starting PyWorker: url=${http_url} timeout=${timeout}s"
+  log "waiting for A2F HTTP readiness: url=${http_url} timeout=${timeout}s"
   while (( SECONDS < deadline )); do
     if python3 - "$http_url" <<'PYREADY' >/dev/null 2>&1
 import sys, urllib.request
@@ -223,11 +20,6 @@ with urllib.request.urlopen(sys.argv[1], timeout=2) as resp:
 PYREADY
     then
       return 0
-    fi
-    if (( SECONDS - last_wait_log >= 60 )); then
-      log "still waiting for A2F readiness after ${SECONDS}s"
-      dump_a2f_diagnostics
-      last_wait_log=$SECONDS
     fi
     sleep "${A2F_READY_POLL_SEC:-5}"
   done
@@ -255,34 +47,14 @@ start_pyworker_after_a2f_boot() {
     python3 /app/worker.py
 }
 
-log "wrapper active build=${A2F_WRAPPER_BUILD:-unknown} cwd=$(pwd) LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-} PYTHONPATH=${PYTHONPATH:-} NIM_USE_MODEL_MANIFEST_V0=${NIM_USE_MODEL_MANIFEST_V0:-<unset>} NIM_SKIP_A2F_START=${NIM_SKIP_A2F_START:-<unset>} NIM_DISABLE_MODEL_DOWNLOAD=${NIM_DISABLE_MODEL_DOWNLOAD:-<unset>} NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES:-<unset>} CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
+log "wrapper active build=${A2F_WRAPPER_BUILD:-unknown}"
 
 if [ "${NIM_SKIP_A2F_START:-}" = "true" ] || [ "${NIM_SKIP_A2F_START:-}" = "1" ]; then
-  log "unsetting NIM_SKIP_A2F_START so NVIDIA start_server can launch gRPC on 52000"
   unset NIM_SKIP_A2F_START
 fi
 
-mkdir -p /tmp/xdg-runtime-root /tmp/gstreamer-cache
-chmod 700 /tmp/xdg-runtime-root || true
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/xdg-runtime-root}"
-export GST_REGISTRY="${GST_REGISTRY:-/tmp/gstreamer-cache/registry.bin}"
-export GST_PLUGIN_SCANNER="${GST_PLUGIN_SCANNER:-/usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner}"
-_gst_attempts="${GST_WARMUP_ATTEMPTS:-6}"
-_gst_i=1
-while (( _gst_i <= _gst_attempts )); do
-  log "warming GStreamer registry attempt ${_gst_i}/${_gst_attempts}"
-  if gst-inspect-1.0 --version >/dev/null 2>&1; then
-    log "GStreamer registry warm-up succeeded"
-    break
-  fi
-  rm -f "$GST_REGISTRY"
-  sleep 2
-  _gst_i=$(( _gst_i + 1 ))
-done
-
 start_pyworker_after_a2f_boot &
-pyworker_pid=$!
 
 export SERVER_START_SCRIPT_PATH="${SERVER_START_SCRIPT_PATH:-/opt/nim/start_server.sh}"
-log "exec NVIDIA A2F startup exactly like base image: /bin/bash -c ${SERVER_START_SCRIPT_PATH}"
+log "exec NVIDIA A2F startup: /bin/bash -c ${SERVER_START_SCRIPT_PATH}"
 exec /bin/bash -c "$SERVER_START_SCRIPT_PATH"
