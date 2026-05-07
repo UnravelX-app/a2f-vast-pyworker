@@ -223,7 +223,7 @@ def _grpc_activity_watcher() -> None:
 
 
 def _workload(_: dict[str, Any]) -> float:
-    return 1.0
+    return 1.0 if _has_grpc_connections() else 0.0
 
 
 def main() -> None:
