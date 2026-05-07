@@ -33,6 +33,7 @@ A2F_HTTP_READY_URL = os.getenv("A2F_HTTP_READY_URL", "http://127.0.0.1:8000/v1/h
 A2F_GRPC_HOST = os.getenv("A2F_GRPC_HOST", "127.0.0.1")
 A2F_GRPC_PORT = int(os.getenv("A2F_GRPC_PORT", "52000"))
 A2F_READY_TIMEOUT_SEC = int(os.getenv("A2F_READY_TIMEOUT_SEC", "3600"))
+A2F_GRPC_READY_TIMEOUT_SEC = int(os.getenv("A2F_GRPC_READY_TIMEOUT_SEC", "600"))
 A2F_READY_POLL_SEC = float(os.getenv("A2F_READY_POLL_SEC", "5"))
 
 LOAD_LOG_PREFIX = "A2F_READY"
@@ -113,7 +114,9 @@ def _refresh_status() -> dict[str, Any]:
 
 
 def _readiness_watcher() -> None:
+    import sys
     started = time.monotonic()
+    http_became_ready_at: float | None = None
     last_info = 0.0
     while True:
         status = _refresh_status()
@@ -122,13 +125,32 @@ def _readiness_watcher() -> None:
             return
 
         now = time.monotonic()
+        if status.get("http_ready") and http_became_ready_at is None:
+            http_became_ready_at = now
+
         if now - last_info >= 30:
             last_info = now
             _log(INFO_LOG_PREFIX, "waiting for Audio2Face NIM", **status)
 
         if now - started > A2F_READY_TIMEOUT_SEC:
             _log(ERROR_LOG_PREFIX, "timed out waiting for Audio2Face NIM", **status)
-            return
+            sys.exit(1)
+
+        # If HTTP has been ready for a while but gRPC still refuses connections,
+        # the gRPC service crashed at startup (e.g. GLib abort). Exit so Vast.ai
+        # can provision a fresh instance on a different host.
+        if (
+            http_became_ready_at is not None
+            and not status.get("grpc_ready")
+            and (now - http_became_ready_at) > A2F_GRPC_READY_TIMEOUT_SEC
+        ):
+            _log(
+                ERROR_LOG_PREFIX,
+                "gRPC not ready within timeout after HTTP became ready — exiting for Vast.ai to retry on a new host",
+                **status,
+            )
+            sys.exit(1)
+
         time.sleep(A2F_READY_POLL_SEC)
 
 
