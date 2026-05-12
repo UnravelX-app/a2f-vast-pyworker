@@ -34,8 +34,10 @@ A2F_HTTP_READY_URL = os.getenv("A2F_HTTP_READY_URL", "http://127.0.0.1:8000/v1/h
 A2F_GRPC_HOST = os.getenv("A2F_GRPC_HOST", "127.0.0.1")
 A2F_GRPC_PORT = int(os.getenv("A2F_GRPC_PORT", "52000"))
 A2F_READY_TIMEOUT_SEC = int(os.getenv("A2F_READY_TIMEOUT_SEC", "3600"))
-A2F_GRPC_READY_TIMEOUT_SEC = int(os.getenv("A2F_GRPC_READY_TIMEOUT_SEC", "600"))
+A2F_GRPC_READY_TIMEOUT_SEC = int(os.getenv("A2F_GRPC_READY_TIMEOUT_SEC", "60"))
 A2F_READY_POLL_SEC = float(os.getenv("A2F_READY_POLL_SEC", "5"))
+A2F_GRPC_WATCHDOG_POLL_SEC = float(os.getenv("A2F_GRPC_WATCHDOG_POLL_SEC", "10"))
+A2F_GRPC_WATCHDOG_FAILURES = int(os.getenv("A2F_GRPC_WATCHDOG_FAILURES", "3"))
 
 LOAD_LOG_PREFIX = "A2F_READY"
 ERROR_LOG_PREFIX = "A2F_ERROR"
@@ -207,6 +209,29 @@ def _has_grpc_connections() -> bool:
     return False
 
 
+def _grpc_health_watchdog() -> None:
+    """After NIM is ready, keep monitoring gRPC and exit if it goes down."""
+    import sys
+    _ready.wait()
+    consecutive_failures = 0
+    while True:
+        time.sleep(A2F_GRPC_WATCHDOG_POLL_SEC)
+        grpc_ok, grpc_msg = _check_grpc_tcp()
+        if grpc_ok:
+            consecutive_failures = 0
+        else:
+            consecutive_failures += 1
+            _log(ERROR_LOG_PREFIX, "gRPC health check failed after ready",
+                 failures=consecutive_failures, grpc_message=grpc_msg,
+                 a2f_grpc_addr=f"{A2F_GRPC_HOST}:{A2F_GRPC_PORT}", ts=time.time())
+            if consecutive_failures >= A2F_GRPC_WATCHDOG_FAILURES:
+                _log(ERROR_LOG_PREFIX,
+                     "gRPC down after being ready — exiting for Vast.ai to retry on a new host",
+                     failures=consecutive_failures, grpc_message=grpc_msg,
+                     a2f_grpc_addr=f"{A2F_GRPC_HOST}:{A2F_GRPC_PORT}", ts=time.time())
+                sys.exit(1)
+
+
 def _grpc_activity_watcher() -> None:
     """Ping the Vast worker endpoint whenever active gRPC connections are detected on port 52000."""
     ping_url = f"http://127.0.0.1:{WORKER_PORT}/ping"
@@ -231,6 +256,7 @@ def main() -> None:
     _log(INFO_LOG_PREFIX, "pyworker starting")
     _start_probe_server()
     threading.Thread(target=_readiness_watcher, name="a2f-readiness", daemon=True).start()
+    threading.Thread(target=_grpc_health_watchdog, name="a2f-grpc-watchdog", daemon=True).start()
     threading.Thread(target=_grpc_activity_watcher, name="a2f-grpc-activity", daemon=True).start()
 
     worker_config = WorkerConfig(

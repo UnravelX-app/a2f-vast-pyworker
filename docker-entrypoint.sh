@@ -100,6 +100,7 @@ PYWORKER_WATCHER_PID=$!
 
 if [[ -n "${SERVER_START_SCRIPT_PATH:-}" ]]; then
   log "exec stock NVIDIA A2F start script build=${A2F_WRAPPER_BUILD:-unknown} script=${SERVER_START_SCRIPT_PATH} cwd=$(pwd)"
+  unset GST_REGISTRY GST_REGISTRY_FORK GST_PLUGIN_SCANNER GST_DEBUG
   exec /bin/bash -c "$SERVER_START_SCRIPT_PATH"
 elif [[ "$#" -gt 0 ]]; then
   log "exec A2F using container args: $*"
