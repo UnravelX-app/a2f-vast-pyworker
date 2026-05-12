@@ -58,12 +58,43 @@ if [ "${NIM_SKIP_A2F_START:-}" = "true" ] || [ "${NIM_SKIP_A2F_START:-}" = "1" ]
   unset NIM_SKIP_A2F_START
 fi
 
+warm_gstreamer_registry() {
+  mkdir -p /tmp/xdg-runtime-root /tmp/gstreamer-cache
+  chmod 700 /tmp/xdg-runtime-root || true
+  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/xdg-runtime-root}"
+  export GST_REGISTRY="${GST_REGISTRY:-/tmp/gstreamer-cache/registry.bin}"
+  export GST_PLUGIN_SCANNER="${GST_PLUGIN_SCANNER:-/usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner}"
+
+  local attempts="${GST_WARMUP_ATTEMPTS:-6}"
+  local i=1
+  while (( i <= attempts )); do
+    log "warming GStreamer registry attempt ${i}/${attempts}"
+    if gst-inspect-1.0 --version >/dev/null 2>&1; then
+      log "GStreamer registry warm-up succeeded"
+      return 0
+    fi
+    log "GStreamer registry warm-up failed; retrying"
+    rm -f "$GST_REGISTRY"
+    sleep 2
+    i=$((i + 1))
+  done
+  log "GStreamer registry warm-up failed after ${attempts} attempts — continuing anyway"
+  return 0
+}
+
+warm_gstreamer_registry
+
 start_pyworker_after_a2f_boot &
 
 export SERVER_START_SCRIPT_PATH="${SERVER_START_SCRIPT_PATH:-/opt/nim/start_server.sh}"
 log "exec NVIDIA A2F startup: /bin/bash -c ${SERVER_START_SCRIPT_PATH}"
-# Unset any GStreamer env vars that may have been injected by Vast.ai instance config.
-# GST_REGISTRY_FORK=no in particular causes GStreamer to scan plugins in-process,
-# which triggers a GLib pthread_setspecific crash in the NIM's threading model.
-unset GST_REGISTRY GST_REGISTRY_FORK GST_PLUGIN_SCANNER GST_DEBUG
+# GST_REGISTRY and GST_PLUGIN_SCANNER must remain set so A2F uses the pre-built
+# registry and the external scanner binary — preventing the in-process scan that
+# triggers GLib pthread_setspecific abort and kills gRPC while HTTP stays up.
+# Only unset vars that Vast.ai injects that are harmful:
+# - GST_REGISTRY_FORK=no forces in-process scanning → crash
+# - GST_PLUGIN_PATH / GST_PLUGIN_SYSTEM_PATH may point to host paths that break
+unset GST_REGISTRY_FORK GST_DEBUG \
+      GST_PLUGIN_PATH GST_PLUGIN_SYSTEM_PATH GST_REGISTRY_UPDATE \
+      GST_PLUGIN_PATH_1_0 GST_PLUGIN_SYSTEM_PATH_1_0
 exec /bin/bash -c "$SERVER_START_SCRIPT_PATH"

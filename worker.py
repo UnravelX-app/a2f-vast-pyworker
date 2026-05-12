@@ -34,7 +34,8 @@ A2F_HTTP_READY_URL = os.getenv("A2F_HTTP_READY_URL", "http://127.0.0.1:8000/v1/h
 A2F_GRPC_HOST = os.getenv("A2F_GRPC_HOST", "127.0.0.1")
 A2F_GRPC_PORT = int(os.getenv("A2F_GRPC_PORT", "52000"))
 A2F_READY_TIMEOUT_SEC = int(os.getenv("A2F_READY_TIMEOUT_SEC", "3600"))
-A2F_GRPC_READY_TIMEOUT_SEC = int(os.getenv("A2F_GRPC_READY_TIMEOUT_SEC", "60"))
+A2F_GRPC_READY_TIMEOUT_SEC = int(os.getenv("A2F_GRPC_READY_TIMEOUT_SEC", "300"))
+A2F_GRPC_MIN_WAIT_SEC = int(os.getenv("A2F_GRPC_MIN_WAIT_SEC", "120"))
 A2F_READY_POLL_SEC = float(os.getenv("A2F_READY_POLL_SEC", "5"))
 A2F_GRPC_WATCHDOG_POLL_SEC = float(os.getenv("A2F_GRPC_WATCHDOG_POLL_SEC", "10"))
 A2F_GRPC_WATCHDOG_FAILURES = int(os.getenv("A2F_GRPC_WATCHDOG_FAILURES", "3"))
@@ -140,11 +141,15 @@ def _readiness_watcher() -> None:
             sys.exit(1)
 
         # If HTTP has been ready for a while but gRPC still refuses connections,
-        # the gRPC service crashed at startup (e.g. GLib abort). Exit so Vast.ai
+        # the gRPC service likely crashed (e.g. GLib abort). Exit so Vast.ai
         # can provision a fresh instance on a different host.
+        # We enforce a minimum wait from startup (A2F_GRPC_MIN_WAIT_SEC) before
+        # starting the gRPC timeout countdown, since gRPC can take several minutes
+        # after HTTP becomes ready on slow model-load hosts.
         if (
             http_became_ready_at is not None
             and not status.get("grpc_ready")
+            and (now - started) > A2F_GRPC_MIN_WAIT_SEC
             and (now - http_became_ready_at) > A2F_GRPC_READY_TIMEOUT_SEC
         ):
             _log(

@@ -11,7 +11,7 @@ RUN chmod +x /app/a2f-entrypoint.sh \
 
 WORKDIR /opt/nim
 
-ENV A2F_WRAPPER_BUILD=stock-entrypoint-local-probe-v34 \
+ENV A2F_WRAPPER_BUILD=stock-entrypoint-local-probe-v36 \
     A2F_PYWORKER_START_DELAY_SEC=45
 
 EXPOSE 8000 52000 18000 18002
