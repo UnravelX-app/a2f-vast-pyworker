@@ -39,12 +39,22 @@ A2F_GRPC_MIN_WAIT_SEC = int(os.getenv("A2F_GRPC_MIN_WAIT_SEC", "120"))
 A2F_READY_POLL_SEC = float(os.getenv("A2F_READY_POLL_SEC", "5"))
 A2F_GRPC_WATCHDOG_POLL_SEC = float(os.getenv("A2F_GRPC_WATCHDOG_POLL_SEC", "10"))
 A2F_GRPC_WATCHDOG_FAILURES = int(os.getenv("A2F_GRPC_WATCHDOG_FAILURES", "3"))
+# Grace period after reporting ready before the watchdog counts gRPC failures.
+# Gives the NIM time to fully stabilize its gRPC service after the startup probe passes.
+A2F_READY_STABLE_SEC = int(os.getenv("A2F_READY_STABLE_SEC", "60"))
 
 LOAD_LOG_PREFIX = "A2F_READY"
 ERROR_LOG_PREFIX = "A2F_ERROR"
 INFO_LOG_PREFIX = "A2F_INFO"
 
+# HTTP/2 connection preface + minimal SETTINGS frame (no settings payload).
+# Sending this and receiving a SETTINGS frame back proves the server is actually
+# serving gRPC over HTTP/2, not just accepting the TCP handshake.
+_H2_PREFACE = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+_H2_SETTINGS_FRAME = b"\x00\x00\x00\x04\x00\x00\x00\x00\x00"
+
 _ready = threading.Event()
+_status_lock = threading.Lock()
 _last_status: dict[str, Any] = {
     "ready": False,
     "http_ready": False,
@@ -88,10 +98,28 @@ def _check_http_ready(timeout: float = 2.0) -> tuple[bool, str]:
         return False, f"http_exception={type(exc).__name__}: {exc}"
 
 
-def _check_grpc_tcp(timeout: float = 2.0) -> tuple[bool, str]:
+def _check_grpc_tcp(timeout: float = 5.0) -> tuple[bool, str]:
+    """Verify gRPC readiness via HTTP/2 handshake.
+
+    A plain TCP connect to port 52000 succeeds as soon as the kernel accepts the
+    connection, which can happen before the gRPC service has finished binding.
+    Sending the HTTP/2 client preface and waiting for the server SETTINGS frame
+    proves the service is actually serving gRPC over HTTP/2.
+    """
     try:
-        with socket.create_connection((A2F_GRPC_HOST, A2F_GRPC_PORT), timeout=timeout):
-            return True, "tcp_connect_ok"
+        with socket.create_connection((A2F_GRPC_HOST, A2F_GRPC_PORT), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            sock.sendall(_H2_PREFACE + _H2_SETTINGS_FRAME)
+            data = b""
+            while len(data) < 9:
+                chunk = sock.recv(128)
+                if not chunk:
+                    return False, f"grpc_h2_eof_after={len(data)}b"
+                data += chunk
+            # Frame header: 3-byte length, 1-byte type (0x4=SETTINGS), 1-byte flags, 4-byte stream_id
+            if data[3] == 0x04:
+                return True, "grpc_h2_ok"
+            return False, f"grpc_unexpected_frame_type=0x{data[3]:02x} hex={data[:16].hex()}"
     except Exception as exc:
         return False, f"grpc_tcp_exception={type(exc).__name__}: {exc}"
 
@@ -100,21 +128,27 @@ def _refresh_status() -> dict[str, Any]:
     http_ok, http_msg = _check_http_ready()
     grpc_ok, grpc_msg = _check_grpc_tcp()
     ready = http_ok and grpc_ok
-    _last_status.update(
-        {
-            "ready": ready,
-            "http_ready": http_ok,
-            "grpc_ready": grpc_ok,
-            "http_message": http_msg,
-            "grpc_message": grpc_msg,
-            "a2f_http_ready_url": A2F_HTTP_READY_URL,
-            "a2f_grpc_addr": f"{A2F_GRPC_HOST}:{A2F_GRPC_PORT}",
-            "ts": time.time(),
-        }
-    )
+    with _status_lock:
+        _last_status.update(
+            {
+                "ready": ready,
+                "http_ready": http_ok,
+                "grpc_ready": grpc_ok,
+                "http_message": http_msg,
+                "grpc_message": grpc_msg,
+                "a2f_http_ready_url": A2F_HTTP_READY_URL,
+                "a2f_grpc_addr": f"{A2F_GRPC_HOST}:{A2F_GRPC_PORT}",
+                "ts": time.time(),
+            }
+        )
     if ready:
         _ready.set()
     return dict(_last_status)
+
+
+def _get_cached_status() -> dict[str, Any]:
+    with _status_lock:
+        return dict(_last_status)
 
 
 def _readiness_watcher() -> None:
@@ -177,7 +211,11 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _handle(self) -> None:
-        status = _refresh_status()
+        # Use the cached status maintained by background threads.  Probing live
+        # on every request means Vast's frequent health polls directly trigger
+        # gRPC probes, which can return transient 503s and push the worker into
+        # error state before the NIM has fully stabilized.
+        status = _get_cached_status()
         if self.path in ("/", "/ping", "/health", "/ready", "/v1/health/ready"):
             self._send_json(200 if status["ready"] else 503, status)
             return
@@ -215,13 +253,36 @@ def _has_grpc_connections() -> bool:
 
 
 def _grpc_health_watchdog() -> None:
-    """After NIM is ready, keep monitoring gRPC and exit if it goes down."""
+    """After NIM is ready, keep _last_status current and exit if gRPC stays down.
+
+    A2F_READY_STABLE_SEC: grace period after reporting ready before failures count.
+    This lets the NIM fully stabilize its gRPC service without triggering a false
+    exit from transient flaps that happen right after the startup probe passes.
+    """
     import sys
     _ready.wait()
+
+    if A2F_READY_STABLE_SEC > 0:
+        _log(INFO_LOG_PREFIX, "gRPC watchdog: entering stability grace period",
+             stable_sec=A2F_READY_STABLE_SEC, ts=time.time())
+        time.sleep(A2F_READY_STABLE_SEC)
+        _log(INFO_LOG_PREFIX, "gRPC watchdog: grace period elapsed, starting active monitoring",
+             ts=time.time())
+
     consecutive_failures = 0
     while True:
         time.sleep(A2F_GRPC_WATCHDOG_POLL_SEC)
+        http_ok, http_msg = _check_http_ready()
         grpc_ok, grpc_msg = _check_grpc_tcp()
+        with _status_lock:
+            _last_status.update({
+                "ready": http_ok and grpc_ok,
+                "http_ready": http_ok,
+                "grpc_ready": grpc_ok,
+                "http_message": http_msg,
+                "grpc_message": grpc_msg,
+                "ts": time.time(),
+            })
         if grpc_ok:
             consecutive_failures = 0
         else:

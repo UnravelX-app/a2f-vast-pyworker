@@ -95,16 +95,47 @@ start_pyworker_when_ready() {
     python3 /app/worker.py
 }
 
+_NIM_LOG="${PYWORKER_MODEL_LOG_FILE:-/var/log/portal/a2f-pyworker.log}"
+
+# Run the NIM and forward its stdout+stderr into the PyWorker log file so
+# both appear together in the Vast worker log stream.
+# Uses a FIFO instead of exec so we can tee the output.  A signal trap ensures
+# SIGTERM from 'docker stop' still reaches the NIM process for graceful shutdown.
+_forward_nim_logs() {
+  local fifo nim_pid log_pid rc=0
+  fifo="$(mktemp -u /tmp/nim-log-XXXX)"
+  mkfifo "$fifo"
+
+  # Read from FIFO, prefix each line, append to PyWorker log AND stdout
+  awk '{ print "[NIM] " $0; fflush() }' < "$fifo" | tee -a "$_NIM_LOG" &
+  log_pid=$!
+
+  # Start NIM, writing its combined stdout+stderr into the FIFO
+  "$@" > "$fifo" 2>&1 &
+  nim_pid=$!
+
+  # Unlink FIFO path; open file descriptors keep the pipe alive
+  rm -f "$fifo"
+
+  # Forward shutdown signals so 'docker stop' reaches the NIM gracefully
+  trap "kill -TERM $nim_pid 2>/dev/null" TERM
+  trap "kill -INT  $nim_pid 2>/dev/null" INT
+
+  wait "$nim_pid" || rc=$?
+  wait "$log_pid" 2>/dev/null || true
+  return $rc
+}
+
 start_pyworker_when_ready &
 PYWORKER_WATCHER_PID=$!
 
 if [[ -n "${SERVER_START_SCRIPT_PATH:-}" ]]; then
-  log "exec stock NVIDIA A2F start script build=${A2F_WRAPPER_BUILD:-unknown} script=${SERVER_START_SCRIPT_PATH} cwd=$(pwd)"
+  log "starting NVIDIA A2F start script build=${A2F_WRAPPER_BUILD:-unknown} script=${SERVER_START_SCRIPT_PATH} cwd=$(pwd) (NIM logs → ${_NIM_LOG})"
   unset GST_REGISTRY GST_REGISTRY_FORK GST_PLUGIN_SCANNER GST_DEBUG
-  exec /bin/bash -c "$SERVER_START_SCRIPT_PATH"
+  _forward_nim_logs /bin/bash -c "$SERVER_START_SCRIPT_PATH"
 elif [[ "$#" -gt 0 ]]; then
-  log "exec A2F using container args: $*"
-  exec "$@"
+  log "starting A2F using container args (NIM logs → ${_NIM_LOG}): $*"
+  _forward_nim_logs "$@"
 else
   cat >&2 <<'EOF'
 [a2f-entrypoint] ERROR: no A2F startup command configured.
